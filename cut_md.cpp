@@ -1,6 +1,6 @@
 //Cut_md runs classical molecular dynamic using a lennard jones potential to compute forces and energies.
 //The velocity Verlet algorithm is employed for solving the Newton's equations of motion. 
-//INPUT FILE: an xyz file of coordinates with no header and no comment
+//INPUT FILE: a list of atoms, one for line, with name and xyz coordinates. No header and no comment
 //OUTPUT FILE: standard xyz coordinates file
 //In this version it cannot distinguish different elemental species
 //cut_md is written in c++17.
