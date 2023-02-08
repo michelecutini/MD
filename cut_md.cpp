@@ -19,7 +19,6 @@
 #include <chrono>
 #include <omp.h>
 
-
 using namespace std;
 
 //CONSTANTS
@@ -33,17 +32,14 @@ float eta {1.0104}; // eta parameter, in eV
 float sigma {2.0}; // sigma parameter, in Ang
 float cut_off_distance {9.0};// cut_off distance for computing forces and energy
 
-
 //classes
 class Atom {
     public:
-
     //attributes
     string element_name;
     vector <float> position {0,0,0};
     vector <float> force {0,0,0};
     vector <float> velocity {0,0,0};
-
 
     // methods
 
@@ -124,8 +120,6 @@ void print_info_toscreen (vector <Atom> atoms_vector_list, int i, vector <vector
 void print_info_tofile (vector <Atom> atoms_vector_list, ofstream& output_file);
 
 
-
-
 int main (int argc, char *argv[] ) {
 //initial time
 chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
@@ -144,8 +138,6 @@ steps_dynamic {10000}; // how many steps of MD?
 string input_file_name {"test.txt"};
 // output file name
 string output_file_name {"output.xyz"};
-
-
 
 //define the vector of Atom objects
 vector <Atom> atoms_vector_list;
@@ -190,8 +182,7 @@ cout << "Wall time MD cycle= " << chrono::duration_cast<std::chrono::millisecond
 return 0;
 }
 
-
-//FUNCTIONs
+//FUNCTIONS
 
 // import atoms from file
 // INPUT: path to file
