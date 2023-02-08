@@ -4,7 +4,6 @@
 //OUTPUT FILE: standard xyz coordinates file
 //In this version it cannot distinguish different elemental species
 //cut_md is written in c++17.
-
 #include <cstdlib>
 #include <ctime>
 #include <iomanip>
@@ -17,6 +16,9 @@
 #include <sstream>
 #include <cstdlib>
 #include <ctime>
+#include <chrono>
+#include <omp.h>
+
 
 using namespace std;
 
@@ -29,7 +31,7 @@ float k_boltzmann {1.380649*pow(10, -23)};
 /*                           parameters of the LJ potential                          */
 float eta {1.0104}; // eta parameter, in eV
 float sigma {2.0}; // sigma parameter, in Ang
-float cut_off_distance {10.0};// cut_off distance for computing forces and energy
+float cut_off_distance {9.0};// cut_off distance for computing forces and energy
 
 
 //classes
@@ -44,7 +46,7 @@ class Atom {
 
 
     // methods
-    
+
     // LJ_energy: energy between atom pair
     // input atom object, output LJ energy as a float
     float LJ_energy (Atom atom_pair){
@@ -73,7 +75,7 @@ class Atom {
         d = sqrt(square_dist);
         return d;
     }
-    
+
     // atom_atom_force_LJ: LJ force between an atom pair, in its x y z coordinates
     // input: atom object, output: vector with x y z components of the force
     vector <float> atom_atom_force_LJ (Atom atom_pair){
@@ -109,22 +111,25 @@ class Atom {
 
 //PROTOTIPES FUNCTIONS
 vector <Atom> import_atoms (string path_input);
-vector <vector <unsigned>> screen_pairwise_interaction (vector <Atom> atoms_vector_list);
-vector <Atom> compute_force (vector <Atom> atoms_vector_list);
+vector <vector <unsigned>> screen_couples_interaction (vector <Atom> atoms_vector_list);
+vector <Atom> compute_force (vector <Atom> atoms_vector_list, vector <vector <unsigned>> couples);
 vector <Atom> starting_velocities (vector <Atom> atoms_vector_list, float T);
 vector <Atom> compute_positions (vector <Atom> atoms_vector_list, float time_step);
 vector <Atom> compute_velocity_and_forces (vector <Atom> atoms_vector_list,
-float time_step, vector <Atom> (*function_to_compute_force) (vector <Atom> atoms_vector_list ));
+float time_step, vector <vector <unsigned>> couples);
 vector <Atom> termostat (vector <Atom> atoms_vector_list, float T);
-float compute_energy (vector <Atom> atoms_vector_list);
+float compute_energy (vector <Atom> atoms_vector_list, vector <vector <unsigned>> couples);
 float compute_temperature (vector <Atom> atoms_vector_list);
-void print_info_toscreen (vector <Atom> atoms_vector_list, int );
+void print_info_toscreen (vector <Atom> atoms_vector_list, int i, vector <vector <unsigned>> couples);
 void print_info_tofile (vector <Atom> atoms_vector_list, ofstream& output_file);
 
 
 
 
 int main (int argc, char *argv[] ) {
+//initial time
+chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+
 /*                           parameters of the dynamics                          */
 //units of measurements: space: Ang. time: fs, energy: eV
 //Set Temperature in K
@@ -132,7 +137,9 @@ float temperature {300.0};
 //time step in fs
 float time_step{1};
 //MD steps
-int steps {10};
+int steps_temostat {20},  // how often switch on the ternostat
+steps_couples_calc {20}, // how often to recalculate the atoms pairwise interaciotn
+steps_dynamic {10000}; // how many steps of MD?
 // input file name
 string input_file_name {"test.txt"};
 // output file name
@@ -150,27 +157,46 @@ atoms_vector_list = starting_velocities(atoms_vector_list, temperature);
 //open output file
 ofstream output_file;
 output_file.open (output_file_name);
+//compute the couples of atoms within the cutoff
+vector <vector <unsigned>> couples;
+couples=screen_couples_interaction(atoms_vector_list);
 //compute initial forces
-atoms_vector_list = compute_force(atoms_vector_list);
+atoms_vector_list = compute_force(atoms_vector_list, couples);
 /*                           printing options                          */
 print_info_tofile (atoms_vector_list, output_file);
-print_info_toscreen(atoms_vector_list,0);
-
+print_info_toscreen(atoms_vector_list,0, couples);
+    clock_t t,t1,t2,t3,t4,t5;
+    t = clock();
 /////RUN THE DYNAMICs////////
-for (int i {1};i <= steps; i++)
+for (int i {1};i <= steps_dynamic; i++)
 {
+//    t1 = clock();
     //compute positions
     atoms_vector_list = compute_positions(atoms_vector_list, time_step);
+//    t2 = clock();
+//    cout << " CPU time compute positions [ms] " << (t2-t1)/1000 <<endl;
     //compute the new velocity and new forces
-    atoms_vector_list = compute_velocity_and_forces(atoms_vector_list, time_step, compute_force);
-    //termostat every 20 steps of MD
-    if (i % 20 == 0){
+    atoms_vector_list = compute_velocity_and_forces(atoms_vector_list, time_step, couples);
+//    t3 = clock();
+//    cout << " CPU time compute the new velocity and new forces [ms] " << (t3-t2)/1000 <<endl ;
+    //every now and then termostat the MD!
+    if (i % steps_temostat == 0)
         atoms_vector_list=termostat(atoms_vector_list, temperature);
-    }
+    //every now and then recopute the couples!
+    if (i % steps_couples_calc == 0)
+        couples=screen_couples_interaction(atoms_vector_list);
     //printing options
-    print_info_toscreen(atoms_vector_list,i);
+    print_info_toscreen(atoms_vector_list,i,couples);
+//    t4 = clock();
+//    cout << " CPU time print_info_toscreen [ms] " << (t4-t3)/1000 <<endl;
     print_info_tofile (atoms_vector_list, output_file);
+//    t5 = clock();
+//    cout << " CPU time print to file [ms] " << (t5-t4)/1000 <<endl;
+chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+cout << "Wall time MD cycle= " << chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << "[ms]" << endl;
 }
+//final time
+
 return 0;
 }
 
@@ -203,40 +229,49 @@ vector <Atom> import_atoms (string path_input) {
     return atoms_vector_list;
 }
 
-// compute and refresh the forces of each atom object
-// INPUT: atom list
-// OUTPUT: atom list with refreshed forces values
-vector <Atom> compute_force (vector <Atom> atoms_vector_list) {
 //compute the distance and store the atoms pair which are within a certain distance cutoff
-    vector <vector <unsigned>> couples; 
+vector <vector <unsigned>> screen_couples_interaction (vector <Atom> atoms_vector_list){
+    //create a list of atom-atom interactions to study within the cutoff
+    vector <vector <unsigned>> couples;
     for (unsigned i {0}; i<atoms_vector_list.size(); i++)
         for (unsigned  j{i+1}; j<atoms_vector_list.size(); j++)
             if (atoms_vector_list.at(i).distance(atoms_vector_list.at(j)) < cut_off_distance)
                 couples.push_back({i,j});
+    return couples;
+}
+// compute and refresh the forces of each atom object
+// INPUT: atom list
+// OUTPUT: atom list with refreshed forces values
+vector <Atom> compute_force (vector <Atom> atoms_vector_list, vector <vector <unsigned>> couples) {
     //force matrix -- no diagonal terms only one side due to symmetry
     //"array" full of zeros
     vector <float> force (3);
-    vector <vector <float>> force_vector (atoms_vector_list.size(),force);
-    vector <vector <vector <float>>> force_matrix (atoms_vector_list.size(),force_vector);
-    //loop on the list of couples which can be easily split into different processes. 
-    for (unsigned k {0}; k<couples.size(); k++){
-            force_matrix.at(couples.at(k).at(0)).at(couples.at(k).at(1))=
-            atoms_vector_list.at(couples.at(k).at(0)).
-            atom_atom_force_LJ(atoms_vector_list.at(couples.at(k).at(1)));
-    }
+    vector <vector <float>> force_vector (couples.size(),force);
+    //loop on the list of couples.
+    #pragma omp parallel  for
+            for (unsigned k = 0; k<couples.size(); k++){
+                force_vector.at(k)=
+                atoms_vector_list.at(couples.at(k).at(0)).
+                atom_atom_force_LJ(atoms_vector_list.at(couples.at(k).at(1)));
+            }
     //clean forces
     vector <float> v_null {0,0,0};
-    for (int i {0}; i < atoms_vector_list.size(); i++){
+    for (int i {0}; i < atoms_vector_list.size(); i++)
         atoms_vector_list.at(i).force=v_null;
+    // sum over colum and row
+    #pragma omp parallel shared (atoms_vector_list)
+    {
+        #pragma omp for
+        for (unsigned k=0; k<couples.size(); k++)
+                for (unsigned xyz {0}; xyz <3; xyz++){
+                        atoms_vector_list.at(couples.at(k).at(0)).force.at(xyz)+=
+                    force_vector.at(k).at(xyz);
+                        atoms_vector_list.at(couples.at(k).at(1)).force.at(xyz)-=
+                    force_vector.at(k).at(xyz);}
     }
-        // sum over colum and row
-        for (unsigned xyz; xyz <3; xyz++)
-            for (unsigned k {0}; k<couples.size(); k++){
-                atoms_vector_list.at(couples.at(k).at(0)).force.at(xyz)+=force_matrix.at(couples.at(k).at(0)).at(couples.at(k).at(1)).at(xyz);
-                atoms_vector_list.at(couples.at(k).at(1)).force.at(xyz)-=force_matrix.at(couples.at(k).at(0)).at(couples.at(k).at(1)).at(xyz);
-        }
 return atoms_vector_list;
 }
+
 vector <Atom> compute_force_slow (vector <Atom> atoms_vector_list){
         for (unsigned  xyz{0} ; xyz<=2; xyz++){
         for (unsigned i {0} ; i<atoms_vector_list.size(); i++){
@@ -289,13 +324,13 @@ vector <Atom> compute_positions (vector <Atom> atoms_vector_list, float time_ste
     }
 
 //VELOCITY VERLET FOR FORCES AND VELOCITIES
-vector <Atom> compute_velocity_and_forces (vector <Atom> atoms_vector_list, float time_step, vector <Atom> (*function_to_compute_force) (vector <Atom> atoms_vector_list )){
+vector <Atom> compute_velocity_and_forces (vector <Atom> atoms_vector_list, float time_step,  vector <vector <unsigned>> couples){
     //saving current force on a vector
     vector <vector <float>> current_forces;
     for (unsigned i {0} ; i<atoms_vector_list.size(); i++)
         current_forces.push_back(atoms_vector_list.at(i).force);
     //recomputing forces
-    atoms_vector_list = (*function_to_compute_force)(atoms_vector_list);
+    atoms_vector_list = compute_force(atoms_vector_list,couples);
     //computing velocity using old and new forces
     for (unsigned i {0} ; i<atoms_vector_list.size(); i++){
         for (unsigned  xyz{0} ; xyz<=2; xyz++){
@@ -335,18 +370,16 @@ vector <Atom> termostat (vector <Atom> atoms_vector_list, float T){
 }
 
  //COMPUTE total energy
-float compute_energy (vector <Atom> atoms_vector_list){
+float compute_energy (vector <Atom> atoms_vector_list, vector <vector <unsigned>> couples){
     float total_energy{0};
-//compute distance between atoms and screen off the most distanced
-    vector <vector <unsigned>> couples; 
-    for (unsigned i {0}; i<atoms_vector_list.size(); i++)
-        for (unsigned  j{i+1}; j<atoms_vector_list.size(); j++)
-            if (atoms_vector_list.at(i).distance(atoms_vector_list.at(j)) < cut_off_distance)
-                couples.push_back({i,j});
 //    loop on the list of couples
-    for (unsigned k {0}; k<couples.size(); k++)
-            total_energy+=atoms_vector_list.at(couples.at(k).at(0)).LJ_energy(atoms_vector_list.at(couples.at(k).at(1)));
-// slow way to compute the total energy
+
+    #pragma omp parallel for reduction(+:total_energy)
+                for (unsigned k=0; k<couples.size(); k++)
+                        total_energy+=atoms_vector_list.at(couples.at(k).at(0)).LJ_energy(atoms_vector_list.at(couples.at(k).at(1)));
+
+//    }
+    // slow way to compute the total energy
 //        for (unsigned i {0} ; i<atoms_vector_list.size(); i++){
 //            for (unsigned  j{i+1} ; j<atoms_vector_list.size(); j++)
 //                total_energy+=atoms_vector_list.at(i).LJ_energy(atoms_vector_list.at(j));
@@ -355,14 +388,14 @@ float compute_energy (vector <Atom> atoms_vector_list){
  }
 
 //PRINTING SECTION
-void print_info_toscreen (vector <Atom> atoms_vector_list, int i){
+void print_info_toscreen (vector <Atom> atoms_vector_list, int i, vector <vector <unsigned>> couples){
     clock_t t;
     t = clock();
     cout << "step " << i ;
-    cout << " CPU time " << t ;
+//    cout << " CPU time " << t ;
     cout << " temperature "<< compute_temperature(atoms_vector_list);
-    cout << " E= "<<compute_energy(atoms_vector_list)<<" eV";
-    cout << endl;
+    cout << " E= "<<compute_energy(atoms_vector_list,couples)<<" eV";
+//    cout << endl;
 //    cout << endl;
 //    for (unsigned i {0} ; i<atoms_vector_list.size(); i++){
 //        cout << atoms_vector_list.at(i).element_name<<" ";
@@ -398,3 +431,4 @@ output_file <<"comment"<<endl;
     }
     cout << endl;
 }
+
